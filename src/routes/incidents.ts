@@ -3,7 +3,7 @@ import { db } from '../config/db';
 import { incidents, snapshots, timelineEvents, videos, type IncidentStatus } from '../models';
 import { sseManager } from '../services/sse';
 import { OK, NOT_FOUND, INTERNAL_SERVER_ERROR } from '../config/http';
-import { eq, desc, asc } from 'drizzle-orm';
+import { eq, desc, asc, inArray } from 'drizzle-orm';
 
 const router = Router();
 
@@ -63,17 +63,22 @@ router.get('/:id', async (req, res) => {
       .from(snapshots)
       .where(eq(snapshots.incidentId, incidentId));
 
-    // Get timeline event count
-    const eventCount = await db
-      .select()
-      .from(timelineEvents)
-      .where(eq(timelineEvents.incidentId, incidentId));
+    // Get timeline event count (through videos)
+    const videoIds = incidentVideos.map(v => v.id);
+    let timelineEventCount = 0;
+    if (videoIds.length > 0) {
+      const eventCount = await db
+        .select()
+        .from(timelineEvents)
+        .where(inArray(timelineEvents.videoId, videoIds));
+      timelineEventCount = eventCount.length;
+    }
 
     res.status(OK).json({
       ...incident,
       videos: incidentVideos,
       snapshotCount: snapshotCount.length,
-      timelineEventCount: eventCount.length,
+      timelineEventCount,
     });
   } catch (error) {
     console.error('Error fetching incident:', error);
@@ -89,7 +94,7 @@ router.get('/:id/timeline', async (req, res) => {
   try {
     const incidentId = req.params.id;
 
-    // Verify incident exists
+    // Verify incident exists and get its videos
     const [incident] = await db
       .select({ id: incidents.id })
       .from(incidents)
@@ -100,12 +105,23 @@ router.get('/:id/timeline', async (req, res) => {
       return;
     }
 
-    // Get timeline events in chronological order
-    const timeline = await db
-      .select()
-      .from(timelineEvents)
-      .where(eq(timelineEvents.incidentId, incidentId))
-      .orderBy(asc(timelineEvents.timestamp));
+    // Get videos for this incident
+    const incidentVideos = await db
+      .select({ id: videos.id })
+      .from(videos)
+      .where(eq(videos.incidentId, incidentId));
+
+    const videoIds = incidentVideos.map(v => v.id);
+
+    // Get timeline events for all videos in this incident
+    let timeline: unknown[] = [];
+    if (videoIds.length > 0) {
+      timeline = await db
+        .select()
+        .from(timelineEvents)
+        .where(inArray(timelineEvents.videoId, videoIds))
+        .orderBy(asc(timelineEvents.timestamp));
+    }
 
     res.status(OK).json(timeline);
   } catch (error) {
@@ -200,16 +216,21 @@ export async function fetchIncidentCurrentState(incidentId: string): Promise<{
     return null;
   }
 
-  const timeline = await db
-    .select()
-    .from(timelineEvents)
-    .where(eq(timelineEvents.incidentId, incidentId))
-    .orderBy(asc(timelineEvents.timestamp));
-
   const incidentVideos = await db
     .select()
     .from(videos)
     .where(eq(videos.incidentId, incidentId));
+
+  const videoIds = incidentVideos.map(v => v.id);
+
+  let timeline: unknown[] = [];
+  if (videoIds.length > 0) {
+    timeline = await db
+      .select()
+      .from(timelineEvents)
+      .where(inArray(timelineEvents.videoId, videoIds))
+      .orderBy(asc(timelineEvents.timestamp));
+  }
 
   return {
     incident: {

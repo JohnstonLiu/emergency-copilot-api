@@ -26,7 +26,6 @@ const CONTEXT_SNAPSHOT_COUNT = 10;
  */
 interface AITimelineEvent {
   timestamp: string; // ISO timestamp
-  eventType: string;
   description: string;
   fromState?: Record<string, unknown>;
   toState?: Record<string, unknown>;
@@ -85,7 +84,6 @@ Respond with a JSON object containing:
 
 Each event should have:
 - "timestamp": The ISO timestamp when the change occurred (use the snapshot timestamp)
-- "eventType": A snake_case event type (e.g., "person_entered", "weapon_detected", "vehicle_arrived")
 - "description": A clear, human-readable description of what changed
 - "fromState": The previous state (optional)
 - "toState": The new state (optional)
@@ -97,7 +95,6 @@ Example response:
   "events": [
     {
       "timestamp": "2024-01-15T14:30:05.000Z",
-      "eventType": "person_entered",
       "description": "Man enters building through main entrance",
       "fromState": {"location": "outside", "action": "walking"},
       "toState": {"location": "inside_building", "action": "standing"},
@@ -175,7 +172,7 @@ async function getIncidentState(incidentId: string): Promise<Record<string, unkn
  * Store timeline events in the database
  */
 async function storeTimelineEvents(
-  incidentId: string,
+  videoId: string,
   events: AITimelineEvent[],
   newSnapshots: Snapshot[]
 ): Promise<TimelineEvent[]> {
@@ -184,9 +181,8 @@ async function storeTimelineEvents(
   }
 
   const insertValues: InsertTimelineEvent[] = events.map((event) => ({
-    incidentId,
+    videoId,
     timestamp: new Date(event.timestamp),
-    eventType: event.eventType,
     description: event.description,
     fromState: event.fromState ?? null,
     toState: event.toState ?? null,
@@ -226,7 +222,10 @@ export async function generateTimelineEvents(
     return [];
   }
 
-  console.log(`Generating timeline events for incident ${incidentId} from ${newSnapshots.length} snapshots`);
+  // Get videoId from the first snapshot (all snapshots in batch are from same video)
+  const videoId = newSnapshots[0].videoId;
+
+  console.log(`Generating timeline events for video ${videoId} (incident ${incidentId}) from ${newSnapshots.length} snapshots`);
 
   try {
     // Get context
@@ -248,8 +247,8 @@ export async function generateTimelineEvents(
     const aiResponse = parseAIResponse(responseText, newSnapshots);
     console.log(`Parsed ${aiResponse.events.length} events from Gemini response`);
 
-    // Store events
-    const storedEvents = await storeTimelineEvents(incidentId, aiResponse.events, newSnapshots);
+    // Store events with videoId
+    const storedEvents = await storeTimelineEvents(videoId, aiResponse.events, newSnapshots);
 
     // Update incident state if provided
     if (aiResponse.updatedState) {
@@ -266,16 +265,16 @@ export async function generateTimelineEvents(
     // Broadcast each timeline event via SSE
     for (const event of storedEvents) {
       sseManager.broadcastToIncident(incidentId, 'timelineEvent', {
-        incidentId,
+        videoId,
         event,
         timestamp: new Date().toISOString(),
       });
     }
 
-    console.log(`Generated ${storedEvents.length} timeline events for incident ${incidentId}`);
+    console.log(`Generated ${storedEvents.length} timeline events for video ${videoId}`);
     return storedEvents;
   } catch (error) {
-    console.error(`Error generating timeline events for incident ${incidentId}:`, error);
+    console.error(`Error generating timeline events for video ${videoId}:`, error);
     throw error;
   }
 }

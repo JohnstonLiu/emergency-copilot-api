@@ -50,9 +50,8 @@ export const snapshots = pgTable('snapshots', {
 // Timeline Events table - AI-derived state changes
 export const timelineEvents = pgTable('timeline_events', {
   id: uuid('id').primaryKey().defaultRandom(),
-  incidentId: uuid('incident_id').notNull().references(() => incidents.id, { onDelete: 'cascade' }),
+  videoId: uuid('video_id').notNull().references(() => videos.id, { onDelete: 'cascade' }),
   timestamp: timestamp('timestamp').notNull(), // When the change occurred
-  eventType: varchar('event_type', { length: 100 }).notNull(), // 'person_entered', 'weapon_detected', etc.
   description: text('description').notNull(), // Human-readable: "Man enters building"
   fromState: jsonb('from_state'), // Previous state context
   toState: jsonb('to_state'), // New state context
@@ -65,7 +64,6 @@ export const timelineEvents = pgTable('timeline_events', {
 export const incidentsRelations = relations(incidents, ({ many }) => ({
   videos: many(videos),
   snapshots: many(snapshots),
-  timelineEvents: many(timelineEvents),
 }));
 
 export const videosRelations = relations(videos, ({ one, many }) => ({
@@ -74,6 +72,7 @@ export const videosRelations = relations(videos, ({ one, many }) => ({
     references: [incidents.id],
   }),
   snapshots: many(snapshots),
+  timelineEvents: many(timelineEvents),
 }));
 
 export const snapshotsRelations = relations(snapshots, ({ one }) => ({
@@ -88,9 +87,9 @@ export const snapshotsRelations = relations(snapshots, ({ one }) => ({
 }));
 
 export const timelineEventsRelations = relations(timelineEvents, ({ one }) => ({
-  incident: one(incidents, {
-    fields: [timelineEvents.incidentId],
-    references: [incidents.id],
+  video: one(videos, {
+    fields: [timelineEvents.videoId],
+    references: [videos.id],
   }),
 }));
 
