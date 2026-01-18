@@ -20,4 +20,4 @@ export const SNAPSHOT_BATCH_MAX_SIZE = parseInt(getEnv("SNAPSHOT_BATCH_MAX_SIZE"
 
 // Incident grouping configuration
 export const INCIDENT_TIME_WINDOW_HOURS = parseInt(getEnv("INCIDENT_TIME_WINDOW_HOURS", "1"));
-export const INCIDENT_RADIUS_METERS = parseInt(getEnv("INCIDENT_RADIUS_METERS", "100"));
+export const INCIDENT_RADIUS_METERS = parseInt(getEnv("INCIDENT_RADIUS_METERS", "50"));

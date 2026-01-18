@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { db } from '../config/db';
-import { videos, type VideoStatus } from '../models';
+import { videos, timelineEvents, type VideoStatus } from '../models';
 import { updateVideoStatus } from '../services/incidentGrouper';
 import { BAD_REQUEST, INTERNAL_SERVER_ERROR, OK, NOT_FOUND } from '../config/http';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, asc } from 'drizzle-orm';
 import { sseManager } from '../services/sse';
 
 const router = Router();
@@ -58,15 +58,12 @@ router.patch('/:id', async (req, res) => {
       .where(eq(videos.id, videoId));
 
     // Broadcast video status change
-    if (existingVideo.incidentId) {
-      sseManager.broadcastToIncident(existingVideo.incidentId, 'videoStatusChanged', {
-        videoId,
-        incidentId: existingVideo.incidentId,
-        status: updatedVideo.status,
-        videoUrl: updatedVideo.videoUrl,
-        timestamp: new Date().toISOString(),
-      });
-    }
+    sseManager.broadcast('videoStatusChanged', {
+      videoId,
+      status: updatedVideo.status,
+      videoUrl: updatedVideo.videoUrl,
+      timestamp: new Date().toISOString(),
+    });
 
     res.status(OK).json(updatedVideo);
   } catch (error) {
@@ -124,6 +121,39 @@ router.get('/:id', async (req, res) => {
   } catch (error) {
     console.error('Error fetching video:', error);
     res.status(INTERNAL_SERVER_ERROR).json({ error: 'Failed to fetch video' });
+  }
+});
+
+/**
+ * GET /videos/:id/timeline
+ * Get the timeline of AI-derived events for a video
+ */
+router.get('/:id/timeline', async (req, res) => {
+  try {
+    const videoId = req.params.id;
+
+    // Verify video exists
+    const [video] = await db
+      .select({ id: videos.id })
+      .from(videos)
+      .where(eq(videos.id, videoId));
+
+    if (!video) {
+      res.status(NOT_FOUND).json({ error: 'Video not found' });
+      return;
+    }
+
+    // Get timeline events for this video
+    const timeline = await db
+      .select()
+      .from(timelineEvents)
+      .where(eq(timelineEvents.videoId, videoId))
+      .orderBy(asc(timelineEvents.timestamp));
+
+    res.status(OK).json(timeline);
+  } catch (error) {
+    console.error('Error fetching timeline:', error);
+    res.status(INTERNAL_SERVER_ERROR).json({ error: 'Failed to fetch timeline' });
   }
 });
 

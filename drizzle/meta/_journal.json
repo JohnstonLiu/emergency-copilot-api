@@ -22,6 +22,20 @@
       "when": 1737158400000,
       "tag": "0002_remove_snapshot_incident_id",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1768709960255,
+      "tag": "0003_bitter_puppet_master",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1768712223521,
+      "tag": "0004_powerful_psylocke",
+      "breakpoints": true
     }
   ]
 }

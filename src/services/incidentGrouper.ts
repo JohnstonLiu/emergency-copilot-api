@@ -45,7 +45,7 @@ async function findMatchingIncident(location: VideoLocation): Promise<Incident |
         location.lng,
         incident.lat,
         incident.lng,
-        incident.radius ?? INCIDENT_RADIUS_METERS
+        INCIDENT_RADIUS_METERS
       )
     ) {
       return incident;
@@ -64,7 +64,6 @@ async function createIncident(location: VideoLocation): Promise<Incident> {
   const newIncident: InsertIncident = {
     lat: location.lat,
     lng: location.lng,
-    radius: INCIDENT_RADIUS_METERS,
     status: 'active',
     startedAt: location.startedAt,
     currentState: null,

@@ -3,14 +3,13 @@ import { db } from '../config/db';
 import { GEMINI_API_KEY } from '../config/env';
 import {
   snapshots,
-  incidents,
   timelineEvents,
   videos,
   type Snapshot,
   type TimelineEvent,
   type InsertTimelineEvent,
 } from '../models';
-import { eq, desc, inArray } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
 import { sseManager } from './sse';
 
 // Initialize Gemini
@@ -36,7 +35,7 @@ interface AITimelineEvent {
 
 interface AIResponse {
   events: AITimelineEvent[];
-  updatedState?: Record<string, unknown>;
+  updatedState?: string; // Human-readable summary of current video state
 }
 
 /**
@@ -45,7 +44,7 @@ interface AIResponse {
 function buildPrompt(
   newSnapshots: Snapshot[],
   contextSnapshots: Snapshot[],
-  currentState: Record<string, unknown> | null
+  currentState: string | null
 ): string {
   const contextSection = contextSnapshots.length > 0
     ? `## Recent Context (Previous Snapshots)
@@ -55,8 +54,8 @@ ${contextSnapshots.map((s, i) => `[${i}] ${s.timestamp.toISOString()}: ${s.scena
     : '';
 
   const currentStateSection = currentState
-    ? `## Current Incident State
-${JSON.stringify(currentState, null, 2)}
+    ? `## Current Video State
+${currentState}
 
 `
     : '';
@@ -65,7 +64,7 @@ ${JSON.stringify(currentState, null, 2)}
 ${newSnapshots.map((s, i) => `[${i}] ${s.timestamp.toISOString()}: ${s.scenario} - ${JSON.stringify(s.data)}`).join('\n')}
 `;
 
-  return `You are an AI agent analyzing video surveillance snapshots to build a timeline of an incident. Your job is to identify meaningful STATE CHANGES, not just describe states.
+  return `You are an AI agent analyzing video surveillance snapshots to build a timeline. Your job is to identify meaningful STATE CHANGES, not just describe states.
 
 ${currentStateSection}${contextSection}${newSnapshotsSection}
 
@@ -81,7 +80,7 @@ DO NOT report static states. Only report when something CHANGES from one state t
 ## Response Format
 Respond with a JSON object containing:
 1. "events": Array of timeline events (can be empty if no meaningful changes detected)
-2. "updatedState": Updated understanding of the current incident state (optional)
+2. "updatedState": A brief human-readable summary (1-3 sentences) of what's currently happening in this video stream for display on a dashboard (optional, only include if the situation has meaningfully changed)
 
 Each event should have:
 - "timestamp": The ISO timestamp when the change occurred (use the snapshot timestamp)
@@ -103,10 +102,7 @@ Example response:
       "sourceSnapshotIndices": [1]
     }
   ],
-  "updatedState": {
-    "persons": [{"location": "inside_building", "description": "adult male"}],
-    "threatLevel": "low"
-  }
+  "updatedState": "Adult male entered the building through the main entrance. Currently standing in the lobby area. No immediate threat detected."
 }
 
 Respond ONLY with the JSON object, no additional text.`;
@@ -143,25 +139,13 @@ function parseAIResponse(responseText: string, newSnapshots: Snapshot[]): AIResp
 }
 
 /**
- * Get recent snapshots for context (through videos)
+ * Get recent snapshots for context (from this video only)
  */
-async function getRecentContext(incidentId: string): Promise<Snapshot[]> {
-  // Get videos for this incident
-  const incidentVideos = await db
-    .select({ id: videos.id })
-    .from(videos)
-    .where(eq(videos.incidentId, incidentId));
-
-  const videoIds = incidentVideos.map(v => v.id);
-
-  if (videoIds.length === 0) {
-    return [];
-  }
-
+async function getRecentContext(videoId: string): Promise<Snapshot[]> {
   const recentSnapshots = await db
     .select()
     .from(snapshots)
-    .where(inArray(snapshots.videoId, videoIds))
+    .where(eq(snapshots.videoId, videoId))
     .orderBy(desc(snapshots.timestamp))
     .limit(CONTEXT_SNAPSHOT_COUNT);
 
@@ -170,15 +154,15 @@ async function getRecentContext(incidentId: string): Promise<Snapshot[]> {
 }
 
 /**
- * Get the current incident state
+ * Get the current video state
  */
-async function getIncidentState(incidentId: string): Promise<Record<string, unknown> | null> {
-  const [incident] = await db
-    .select({ currentState: incidents.currentState })
-    .from(incidents)
-    .where(eq(incidents.id, incidentId));
+async function getVideoState(videoId: string): Promise<string | null> {
+  const [video] = await db
+    .select({ currentState: videos.currentState })
+    .from(videos)
+    .where(eq(videos.id, videoId));
 
-  return incident?.currentState as Record<string, unknown> | null;
+  return video?.currentState ?? null;
 }
 
 /**
@@ -208,19 +192,19 @@ async function storeTimelineEvents(
 }
 
 /**
- * Update the incident's current state
+ * Update the video's current state
  */
-async function updateIncidentState(
-  incidentId: string,
-  newState: Record<string, unknown>
+async function updateVideoState(
+  videoId: string,
+  newState: string
 ): Promise<void> {
   await db
-    .update(incidents)
+    .update(videos)
     .set({
       currentState: newState,
       updatedAt: new Date(),
     })
-    .where(eq(incidents.id, incidentId));
+    .where(eq(videos.id, videoId));
 }
 
 /**
@@ -241,9 +225,9 @@ export async function generateTimelineEvents(
   console.log(`Generating timeline events for video ${videoId} (incident ${incidentId}) from ${newSnapshots.length} snapshots`);
 
   try {
-    // Get context
-    const contextSnapshots = await getRecentContext(incidentId);
-    const currentState = await getIncidentState(incidentId);
+    // Get context from this video only
+    const contextSnapshots = await getRecentContext(videoId);
+    const currentState = await getVideoState(videoId);
 
     console.log(`Context: ${contextSnapshots.length} recent snapshots, current state: ${currentState ? 'exists' : 'none'}`);
 
@@ -263,13 +247,13 @@ export async function generateTimelineEvents(
     // Store events with videoId
     const storedEvents = await storeTimelineEvents(videoId, aiResponse.events, newSnapshots);
 
-    // Update incident state if provided
+    // Update video state if provided
     if (aiResponse.updatedState) {
-      await updateIncidentState(incidentId, aiResponse.updatedState);
+      await updateVideoState(videoId, aiResponse.updatedState);
 
       // Broadcast state update via SSE
-      sseManager.broadcastToIncident(incidentId, 'stateUpdated', {
-        incidentId,
+      sseManager.broadcast('stateUpdated', {
+        videoId,
         state: aiResponse.updatedState,
         timestamp: new Date().toISOString(),
       });
@@ -277,7 +261,7 @@ export async function generateTimelineEvents(
 
     // Broadcast each timeline event via SSE
     for (const event of storedEvents) {
-      sseManager.broadcastToIncident(incidentId, 'timelineEvent', {
+      sseManager.broadcast('timelineEvent', {
         videoId,
         event,
         timestamp: new Date().toISOString(),

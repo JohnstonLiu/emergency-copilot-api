@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { db } from '../config/db';
 import { incidents, snapshots, timelineEvents, videos, type IncidentStatus } from '../models';
-import { sseManager } from '../services/sse';
 import { OK, NOT_FOUND, INTERNAL_SERVER_ERROR } from '../config/http';
 import { eq, desc, asc, inArray } from 'drizzle-orm';
 
@@ -179,81 +178,5 @@ router.get('/:id/snapshots', async (req, res) => {
     res.status(INTERNAL_SERVER_ERROR).json({ error: 'Failed to fetch snapshots' });
   }
 });
-
-/**
- * GET /incidents/:id/stream
- * SSE endpoint for real-time updates on a specific incident
- * Sends current state on connect (late-join support)
- */
-router.get('/:id/stream', async (req, res) => {
-  try {
-    const incidentId = req.params.id;
-
-    // Verify incident exists
-    const [incident] = await db
-      .select({ id: incidents.id })
-      .from(incidents)
-      .where(eq(incidents.id, incidentId));
-
-    if (!incident) {
-      res.status(NOT_FOUND).json({ error: 'Incident not found' });
-      return;
-    }
-
-    // Generate client ID
-    const clientId = (req.query.clientId as string) ||
-      `client-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-    console.log(`New SSE connection for incident ${incidentId}: ${clientId}`);
-
-    // Subscribe to incident updates
-    await sseManager.subscribeToIncident(clientId, incidentId, res);
-  } catch (error) {
-    console.error('Error setting up SSE stream:', error);
-    res.status(INTERNAL_SERVER_ERROR).json({ error: 'Failed to setup stream' });
-  }
-});
-
-/**
- * Helper function to fetch current state for an incident
- * Used by SSE manager for late-join support
- */
-export async function fetchIncidentCurrentState(incidentId: string): Promise<{
-  incident: unknown;
-  timeline: unknown[];
-} | null> {
-  const [incident] = await db
-    .select()
-    .from(incidents)
-    .where(eq(incidents.id, incidentId));
-
-  if (!incident) {
-    return null;
-  }
-
-  const incidentVideos = await db
-    .select()
-    .from(videos)
-    .where(eq(videos.incidentId, incidentId));
-
-  const videoIds = incidentVideos.map(v => v.id);
-
-  let timeline: unknown[] = [];
-  if (videoIds.length > 0) {
-    timeline = await db
-      .select()
-      .from(timelineEvents)
-      .where(inArray(timelineEvents.videoId, videoIds))
-      .orderBy(asc(timelineEvents.timestamp));
-  }
-
-  return {
-    incident: {
-      ...incident,
-      videos: incidentVideos,
-    },
-    timeline,
-  };
-}
 
 export default router;

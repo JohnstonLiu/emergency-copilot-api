@@ -1,4 +1,5 @@
 import { pgTable, uuid, varchar, timestamp, text, jsonb, real } from 'drizzle-orm/pg-core';
+// Note: text is used for currentState (human-readable), jsonb for structured data like snapshot data
 import { relations } from 'drizzle-orm';
 
 export type EventScenario = string;
@@ -9,10 +10,8 @@ export type VideoStatus = 'live' | 'ended' | 'recorded';
 export const incidents = pgTable('incidents', {
   id: uuid('id').primaryKey().defaultRandom(),
   status: varchar('status', { length: 50 }).$type<IncidentStatus>().default('active').notNull(),
-  currentState: jsonb('current_state'), // Latest derived understanding from AI
   lat: real('lat').notNull(),
   lng: real('lng').notNull(),
-  radius: real('radius').default(100), // meters for grouping
   startedAt: timestamp('started_at').defaultNow().notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -23,6 +22,7 @@ export const videos = pgTable('videos', {
   id: uuid('id').primaryKey().defaultRandom(),
   incidentId: uuid('incident_id').references(() => incidents.id, { onDelete: 'set null' }),
   status: varchar('status', { length: 50 }).$type<VideoStatus>().default('live').notNull(),
+  currentState: text('current_state'), // Human-readable AI summary of what's happening in this video
   videoUrl: varchar('video_url', { length: 512 }), // Nullable - set when recording is ready
   lat: real('lat').notNull(),
   lng: real('lng').notNull(),

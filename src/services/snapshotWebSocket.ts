@@ -49,32 +49,35 @@ class SnapshotWebSocketManager {
   initialize(server: Server): void {
     this.wss = new WebSocketServer({ server, path: '/ws/snapshots' });
 
-    this.wss.on('connection', (ws) => {
-      console.log('New WebSocket connection');
+    this.wss.on('connection', (ws, req) => {
+      const clientIp = req.socket.remoteAddress || 'unknown';
+      console.log(`[WS] New connection from ${clientIp}. Active connections: ${this.wss!.clients.size}`);
 
       ws.on('message', async (data) => {
         try {
           const message = JSON.parse(data.toString()) as ClientMessage;
+          console.log(`[WS] Received message type: ${message.type}`);
           await this.handleMessage(ws, message);
         } catch (error) {
-          console.error('WebSocket message error:', error);
+          console.error('[WS] Message parse error:', error);
           ws.send(JSON.stringify({ type: 'error', message: 'Invalid message format' }));
         }
       });
 
-      ws.on('close', async () => {
+      ws.on('close', async (code, reason) => {
+        console.log(`[WS] Connection closed. Code: ${code}, Reason: ${reason.toString() || 'none'}`);
         await this.handleDisconnect(ws);
       });
 
       ws.on('error', (error) => {
-        console.error('WebSocket error:', error);
+        console.error('[WS] Socket error:', error);
       });
 
       // Send welcome message
       ws.send(JSON.stringify({ type: 'connected', message: 'Send init message with videoId, lat, lng' }));
     });
 
-    console.log('WebSocket server initialized at /ws/snapshots');
+    console.log('[WS] WebSocket server initialized at /ws/snapshots');
   }
 
   /**
@@ -129,7 +132,7 @@ class SnapshotWebSocketManager {
     };
     this.sessions.set(ws, session);
 
-    console.log(`WebSocket session initialized: video ${videoId} → incident ${incidentId}`);
+    console.log(`[WS] Session initialized: video=${videoId} incident=${incidentId} isNew=${isNewVideo} (${this.sessions.size} active sessions)`);
 
     // Broadcast new video event if this is new
     if (isNewVideo) {
@@ -183,14 +186,14 @@ class SnapshotWebSocketManager {
       data: data || {},
     }).returning();
 
-    console.log(`Snapshot received via WS for incident ${session.incidentId}: ${newSnapshot.id}`);
+    console.log(`[WS] Snapshot received: video=${session.videoId} id=${newSnapshot.id} scenario=${scenario}`);
 
     // Add to buffer for batch processing
     snapshotBuffer.add(session.incidentId, newSnapshot);
 
-    // Broadcast to incident subscribers
-    sseManager.broadcastToIncident(session.incidentId, 'snapshotReceived', {
-      incidentId: session.incidentId,
+    // Broadcast snapshot received
+    sseManager.broadcast('snapshotReceived', {
+      videoId: session.videoId,
       snapshot: {
         id: newSnapshot.id,
         timestamp: newSnapshot.timestamp,
@@ -214,21 +217,23 @@ class SnapshotWebSocketManager {
     const session = this.sessions.get(ws);
 
     if (session) {
-      console.log(`WebSocket disconnected: video ${session.videoId}`);
+      console.log(`[WS] Session ended: video=${session.videoId} incident=${session.incidentId}`);
 
       // Mark video as ended
       await updateVideoStatus(session.videoId, 'ended');
 
       // Broadcast video ended
-      sseManager.broadcastToIncident(session.incidentId, 'videoStatusChanged', {
+      sseManager.broadcast('videoStatusChanged', {
         videoId: session.videoId,
-        incidentId: session.incidentId,
         status: 'ended',
         timestamp: new Date().toISOString(),
       });
 
       // Clean up session
       this.sessions.delete(ws);
+      console.log(`[WS] Session cleaned up. Active sessions: ${this.sessions.size}`);
+    } else {
+      console.log(`[WS] Uninitialized connection closed`);
     }
   }
 

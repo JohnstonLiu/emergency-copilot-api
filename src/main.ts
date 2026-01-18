@@ -13,7 +13,7 @@ import { snapshotWsManager } from './services/snapshotWebSocket';
 // Routes
 import videosRouter from './routes/videos';
 import snapshotsRouter from './routes/snapshots';
-import incidentsRouter, { fetchIncidentCurrentState } from './routes/incidents';
+import incidentsRouter from './routes/incidents';
 
 const app = express();
 const server = createServer(app);
@@ -25,9 +25,6 @@ function initializeServices() {
   snapshotBuffer.setBatchCallback(processBatch);
   console.log('Snapshot buffer initialized with timeline agent callback');
 
-  // Set up SSE manager to fetch current state for late-joining clients
-  sseManager.setFetchCurrentStateCallback(fetchIncidentCurrentState);
-  console.log('SSE manager initialized with current state callback');
 
   // Initialize WebSocket server for snapshot ingestion
   snapshotWsManager.initialize(server);
@@ -84,11 +81,9 @@ server.listen(port, () => {
 ║  • WS     /ws/snapshots          - Snapshot stream ║
 ║  • POST   /snapshots             - Submit snapshot ║
 ║  • GET    /videos                - List videos     ║
+║  • GET    /videos/:id/timeline   - Video timeline  ║
 ║  • GET    /incidents             - List incidents  ║
-║  • GET    /incidents/:id         - Get incident    ║
-║  • GET    /incidents/:id/timeline - Get timeline   ║
-║  • GET    /incidents/:id/stream  - SSE stream      ║
-║  • GET    /stream                - Global SSE      ║
+║  • GET    /stream                - SSE (global)    ║
 ╚════════════════════════════════════════════════════╝
   `);
 });
