@@ -199,8 +199,8 @@ class SnapshotWebSocketManager {
 
     console.log(`[WS] Snapshot received: video=${session.videoId} id=${newSnapshot.id} scenario=${scenario}`);
 
-    // Add to buffer for batch processing
-    snapshotBuffer.add(session.incidentId, newSnapshot);
+    // Add to buffer for batch processing (keyed by videoId to prevent mixing)
+    snapshotBuffer.add(session.videoId, newSnapshot);
 
     // Broadcast snapshot received
     sseManager.broadcast('snapshotReceived', {

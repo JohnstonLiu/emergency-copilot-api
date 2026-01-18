@@ -4,25 +4,25 @@ import { SNAPSHOT_BATCH_WINDOW_MS, SNAPSHOT_BATCH_MIN_SIZE, SNAPSHOT_BATCH_MAX_S
 /**
  * Callback function type for when a batch is ready to be processed
  */
-export type BatchCallback = (incidentId: string, snapshots: Snapshot[]) => Promise<void>;
+export type BatchCallback = (videoId: string, snapshots: Snapshot[]) => Promise<void>;
 
 /**
- * Buffer state for a single incident
+ * Buffer state for a single video
  */
-interface IncidentBuffer {
+interface VideoBuffer {
   snapshots: Snapshot[];
   timer: ReturnType<typeof setTimeout> | null;
 }
 
 /**
- * Service that accumulates snapshots per incident for batched processing.
+ * Service that accumulates snapshots per video for batched processing.
  * Flushes when:
  * - Timer expires AND buffer has >= minBatchSize snapshots
  * - Buffer reaches max size (immediate flush)
  * - Manual flush is triggered (ignores minimum)
  */
 class SnapshotBuffer {
-  private buffers: Map<string, IncidentBuffer> = new Map();
+  private buffers: Map<string, VideoBuffer> = new Map();
   private batchCallback: BatchCallback | null = null;
   private batchWindowMs: number;
   private minBatchSize: number;
@@ -42,43 +42,43 @@ class SnapshotBuffer {
   }
 
   /**
-   * Add a snapshot to the buffer for an incident
-   * @param incidentId Incident ID to buffer for
+   * Add a snapshot to the buffer for a video
+   * @param videoId Video ID to buffer for
    * @param snapshot Snapshot to add
    */
-  add(incidentId: string, snapshot: Snapshot): void {
-    let buffer = this.buffers.get(incidentId);
+  add(videoId: string, snapshot: Snapshot): void {
+    let buffer = this.buffers.get(videoId);
 
     if (!buffer) {
       buffer = {
         snapshots: [],
         timer: null,
       };
-      this.buffers.set(incidentId, buffer);
+      this.buffers.set(videoId, buffer);
     }
 
     buffer.snapshots.push(snapshot);
-    console.log(`Buffered snapshot for incident ${incidentId}. Buffer size: ${buffer.snapshots.length}/${this.minBatchSize} min, ${this.maxBatchSize} max`);
+    console.log(`Buffered snapshot for video ${videoId}. Buffer size: ${buffer.snapshots.length}/${this.minBatchSize} min, ${this.maxBatchSize} max`);
 
     // Start timer if not already running
     if (!buffer.timer) {
       buffer.timer = setTimeout(() => {
-        this.timerFlush(incidentId);
+        this.timerFlush(videoId);
       }, this.batchWindowMs);
     }
 
     // Flush immediately if buffer is full
     if (buffer.snapshots.length >= this.maxBatchSize) {
-      console.log(`Buffer full for incident ${incidentId}, flushing...`);
-      this.flush(incidentId);
+      console.log(`Buffer full for video ${videoId}, flushing...`);
+      this.flush(videoId);
     }
   }
 
   /**
    * Timer-triggered flush - only processes if minimum batch size is met
    */
-  private async timerFlush(incidentId: string): Promise<void> {
-    const buffer = this.buffers.get(incidentId);
+  private async timerFlush(videoId: string): Promise<void> {
+    const buffer = this.buffers.get(videoId);
     
     if (!buffer) return;
 
@@ -87,25 +87,25 @@ class SnapshotBuffer {
 
     // Check if we have enough snapshots
     if (buffer.snapshots.length >= this.minBatchSize) {
-      console.log(`Timer fired for incident ${incidentId}, processing ${buffer.snapshots.length} snapshots`);
-      await this.flush(incidentId);
+      console.log(`Timer fired for video ${videoId}, processing ${buffer.snapshots.length} snapshots`);
+      await this.flush(videoId);
     } else {
-      console.log(`Timer fired for incident ${incidentId}, but only ${buffer.snapshots.length}/${this.minBatchSize} snapshots. Waiting for more...`);
+      console.log(`Timer fired for video ${videoId}, but only ${buffer.snapshots.length}/${this.minBatchSize} snapshots. Waiting for more...`);
       // Restart timer to check again later
       buffer.timer = setTimeout(() => {
-        this.timerFlush(incidentId);
+        this.timerFlush(videoId);
       }, this.batchWindowMs);
     }
   }
 
   /**
-   * Flush the buffer for an incident and process the batch
-   * @param incidentId Incident ID to flush
+   * Flush the buffer for a video and process the batch
+   * @param videoId Video ID to flush
    * @param force Force flush even if below minimum (for shutdown)
    * @returns The flushed snapshots
    */
-  async flush(incidentId: string, force: boolean = false): Promise<Snapshot[]> {
-    const buffer = this.buffers.get(incidentId);
+  async flush(videoId: string, force: boolean = false): Promise<Snapshot[]> {
+    const buffer = this.buffers.get(videoId);
 
     if (!buffer || buffer.snapshots.length === 0) {
       return [];
@@ -113,7 +113,7 @@ class SnapshotBuffer {
 
     // Skip if below minimum (unless forced)
     if (!force && buffer.snapshots.length < this.minBatchSize) {
-      console.log(`Skipping flush for incident ${incidentId}: ${buffer.snapshots.length}/${this.minBatchSize} minimum`);
+      console.log(`Skipping flush for video ${videoId}: ${buffer.snapshots.length}/${this.minBatchSize} minimum`);
       return [];
     }
 
@@ -127,14 +127,14 @@ class SnapshotBuffer {
     const snapshots = [...buffer.snapshots];
     buffer.snapshots = [];
 
-    console.log(`Flushing ${snapshots.length} snapshots for incident ${incidentId}`);
+    console.log(`Flushing ${snapshots.length} snapshots for video ${videoId}`);
 
     // Call the batch callback if set
     if (this.batchCallback) {
       try {
-        await this.batchCallback(incidentId, snapshots);
+        await this.batchCallback(videoId, snapshots);
       } catch (error) {
-        console.error(`Error in batch callback for incident ${incidentId}:`, error);
+        console.error(`Error in batch callback for video ${videoId}:`, error);
       }
     }
 
@@ -142,26 +142,26 @@ class SnapshotBuffer {
   }
 
   /**
-   * Flush all incident buffers (forces flush regardless of minimum)
+   * Flush all video buffers (forces flush regardless of minimum)
    */
   async flushAll(): Promise<void> {
-    const incidentIds = Array.from(this.buffers.keys());
-    await Promise.all(incidentIds.map((id) => this.flush(id, true)));
+    const videoIds = Array.from(this.buffers.keys());
+    await Promise.all(videoIds.map((id) => this.flush(id, true)));
   }
 
   /**
-   * Get the current buffer size for an incident
-   * @param incidentId Incident ID to check
+   * Get the current buffer size for a video
+   * @param videoId Video ID to check
    * @returns Number of snapshots in buffer
    */
-  getBufferSize(incidentId: string): number {
-    return this.buffers.get(incidentId)?.snapshots.length ?? 0;
+  getBufferSize(videoId: string): number {
+    return this.buffers.get(videoId)?.snapshots.length ?? 0;
   }
 
   /**
-   * Get all incident IDs with active buffers
+   * Get all video IDs with active buffers
    */
-  getActiveIncidents(): string[] {
+  getActiveVideos(): string[] {
     return Array.from(this.buffers.keys()).filter(
       (id) => (this.buffers.get(id)?.snapshots.length ?? 0) > 0
     );
@@ -183,8 +183,8 @@ class SnapshotBuffer {
    * Get peek at current buffer contents without flushing
    * Useful for providing context to the timeline agent
    */
-  peek(incidentId: string): Snapshot[] {
-    return [...(this.buffers.get(incidentId)?.snapshots ?? [])];
+  peek(videoId: string): Snapshot[] {
+    return [...(this.buffers.get(videoId)?.snapshots ?? [])];
   }
 }
 

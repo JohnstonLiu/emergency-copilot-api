@@ -74,8 +74,8 @@ router.post('/', async (req, res) => {
 
     console.log(`Snapshot received for incident ${incidentId}: ${newSnapshot.id}`);
 
-    // Add to buffer for batch processing
-    snapshotBuffer.add(incidentId, newSnapshot);
+    // Add to buffer for batch processing (keyed by videoId to prevent mixing)
+    snapshotBuffer.add(videoId, newSnapshot);
 
     // Broadcast snapshot received event
     sseManager.broadcast('snapshotReceived', {

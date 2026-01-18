@@ -212,17 +212,14 @@ async function updateVideoState(
  * This is called by the snapshot buffer when it flushes
  */
 export async function generateTimelineEvents(
-  incidentId: string,
+  videoId: string,
   newSnapshots: Snapshot[]
 ): Promise<TimelineEvent[]> {
   if (newSnapshots.length === 0) {
     return [];
   }
 
-  // Get videoId from the first snapshot (all snapshots in batch are from same video)
-  const videoId = newSnapshots[0].videoId;
-
-  console.log(`Generating timeline events for video ${videoId} (incident ${incidentId}) from ${newSnapshots.length} snapshots`);
+  console.log(`Generating timeline events for video ${videoId} from ${newSnapshots.length} snapshots`);
 
   try {
     // Get context from this video only
@@ -279,6 +276,6 @@ export async function generateTimelineEvents(
 /**
  * Batch processor callback for the snapshot buffer
  */
-export async function processBatch(incidentId: string, snapshotBatch: Snapshot[]): Promise<void> {
-  await generateTimelineEvents(incidentId, snapshotBatch);
+export async function processBatch(videoId: string, snapshotBatch: Snapshot[]): Promise<void> {
+  await generateTimelineEvents(videoId, snapshotBatch);
 }
