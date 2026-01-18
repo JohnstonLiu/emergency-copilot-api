@@ -14,7 +14,7 @@ import { sseManager } from './sse';
 
 // Initialize Gemini
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-const model: GenerativeModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+const model: GenerativeModel = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
 /**
  * Number of recent snapshots to include as context for the AI
@@ -233,13 +233,20 @@ export async function generateTimelineEvents(
     const contextSnapshots = await getRecentContext(incidentId);
     const currentState = await getIncidentState(incidentId);
 
+    console.log(`Context: ${contextSnapshots.length} recent snapshots, current state: ${currentState ? 'exists' : 'none'}`);
+
     // Build prompt and call Gemini
     const prompt = buildPrompt(newSnapshots, contextSnapshots, currentState);
+    console.log(`Calling Gemini with ${newSnapshots.length} new snapshots...`);
+    
     const result = await model.generateContent(prompt);
     const responseText = result.response.text();
 
+    console.log(`Gemini response:\n${responseText.slice(0, 500)}${responseText.length > 500 ? '...' : ''}`);
+
     // Parse response
     const aiResponse = parseAIResponse(responseText, newSnapshots);
+    console.log(`Parsed ${aiResponse.events.length} events from Gemini response`);
 
     // Store events
     const storedEvents = await storeTimelineEvents(incidentId, aiResponse.events, newSnapshots);

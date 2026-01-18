@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { PORT } from './config/env';
-import catchErrors from './middleware/catchErrors';
+import { requestLogger } from './middleware/logger';
 
 // Services
 import { sseManager } from './services/sse';
@@ -27,6 +27,12 @@ function initializeServices() {
   console.log('SSE manager initialized with current state callback');
 }
 
+// Middleware (must be before routes)
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(requestLogger);
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
@@ -35,12 +41,6 @@ app.get('/health', (req, res) => {
     activeSSEClients: sseManager.getClientCount(),
   });
 });
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(catchErrors);
 
 // Mount routes
 app.use('/videos', videosRouter);
@@ -53,6 +53,12 @@ app.get('/stream', (req, res) => {
     `client-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   console.log(`New global SSE connection: ${clientId}`);
   sseManager.addClient(clientId, res);
+});
+
+// Global error handler (must be after routes)
+app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
 // Initialize services and start server

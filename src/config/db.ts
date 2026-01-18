@@ -6,8 +6,7 @@ import { DATABASE_POOLER_URL } from './env';
 // Disable prefetch as it is not supported for "Transaction" pool mode
 const client = postgres(DATABASE_POOLER_URL, { 
   prepare: false, 
-  database: "postgres",
-  ssl: "require"
+  database: "postgres"
 });
 
 // Create drizzle instance

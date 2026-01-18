@@ -1,5 +1,5 @@
 import type { Snapshot } from '../models';
-import { SNAPSHOT_BATCH_WINDOW_MS, SNAPSHOT_BATCH_MAX_SIZE } from '../config/env';
+import { SNAPSHOT_BATCH_WINDOW_MS, SNAPSHOT_BATCH_MIN_SIZE, SNAPSHOT_BATCH_MAX_SIZE } from '../config/env';
 
 /**
  * Callback function type for when a batch is ready to be processed
@@ -17,18 +17,20 @@ interface IncidentBuffer {
 /**
  * Service that accumulates snapshots per incident for batched processing.
  * Flushes when:
- * - Timer expires (batch window)
- * - Buffer reaches max size
- * - Manual flush is triggered
+ * - Timer expires AND buffer has >= minBatchSize snapshots
+ * - Buffer reaches max size (immediate flush)
+ * - Manual flush is triggered (ignores minimum)
  */
 class SnapshotBuffer {
   private buffers: Map<string, IncidentBuffer> = new Map();
   private batchCallback: BatchCallback | null = null;
   private batchWindowMs: number;
+  private minBatchSize: number;
   private maxBatchSize: number;
 
-  constructor(batchWindowMs?: number, maxBatchSize?: number) {
+  constructor(batchWindowMs?: number, minBatchSize?: number, maxBatchSize?: number) {
     this.batchWindowMs = batchWindowMs ?? SNAPSHOT_BATCH_WINDOW_MS;
+    this.minBatchSize = minBatchSize ?? SNAPSHOT_BATCH_MIN_SIZE;
     this.maxBatchSize = maxBatchSize ?? SNAPSHOT_BATCH_MAX_SIZE;
   }
 
@@ -56,12 +58,12 @@ class SnapshotBuffer {
     }
 
     buffer.snapshots.push(snapshot);
-    console.log(`Buffered snapshot for incident ${incidentId}. Buffer size: ${buffer.snapshots.length}`);
+    console.log(`Buffered snapshot for incident ${incidentId}. Buffer size: ${buffer.snapshots.length}/${this.minBatchSize} min, ${this.maxBatchSize} max`);
 
     // Start timer if not already running
     if (!buffer.timer) {
       buffer.timer = setTimeout(() => {
-        this.flush(incidentId);
+        this.timerFlush(incidentId);
       }, this.batchWindowMs);
     }
 
@@ -73,14 +75,45 @@ class SnapshotBuffer {
   }
 
   /**
+   * Timer-triggered flush - only processes if minimum batch size is met
+   */
+  private async timerFlush(incidentId: string): Promise<void> {
+    const buffer = this.buffers.get(incidentId);
+    
+    if (!buffer) return;
+
+    // Clear the timer reference
+    buffer.timer = null;
+
+    // Check if we have enough snapshots
+    if (buffer.snapshots.length >= this.minBatchSize) {
+      console.log(`Timer fired for incident ${incidentId}, processing ${buffer.snapshots.length} snapshots`);
+      await this.flush(incidentId);
+    } else {
+      console.log(`Timer fired for incident ${incidentId}, but only ${buffer.snapshots.length}/${this.minBatchSize} snapshots. Waiting for more...`);
+      // Restart timer to check again later
+      buffer.timer = setTimeout(() => {
+        this.timerFlush(incidentId);
+      }, this.batchWindowMs);
+    }
+  }
+
+  /**
    * Flush the buffer for an incident and process the batch
    * @param incidentId Incident ID to flush
+   * @param force Force flush even if below minimum (for shutdown)
    * @returns The flushed snapshots
    */
-  async flush(incidentId: string): Promise<Snapshot[]> {
+  async flush(incidentId: string, force: boolean = false): Promise<Snapshot[]> {
     const buffer = this.buffers.get(incidentId);
 
     if (!buffer || buffer.snapshots.length === 0) {
+      return [];
+    }
+
+    // Skip if below minimum (unless forced)
+    if (!force && buffer.snapshots.length < this.minBatchSize) {
+      console.log(`Skipping flush for incident ${incidentId}: ${buffer.snapshots.length}/${this.minBatchSize} minimum`);
       return [];
     }
 
@@ -109,11 +142,11 @@ class SnapshotBuffer {
   }
 
   /**
-   * Flush all incident buffers
+   * Flush all incident buffers (forces flush regardless of minimum)
    */
   async flushAll(): Promise<void> {
     const incidentIds = Array.from(this.buffers.keys());
-    await Promise.all(incidentIds.map((id) => this.flush(id)));
+    await Promise.all(incidentIds.map((id) => this.flush(id, true)));
   }
 
   /**
