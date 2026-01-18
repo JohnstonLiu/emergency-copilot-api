@@ -64,17 +64,38 @@ The server will start on `http://localhost:8080` (or the port specified in `.env
 ## API Endpoints
 
 ### Health Check
-- `GET /health` - Server health status
-
-### Snapshots
-- `GET /snapshots/stream` - SSE endpoint for real-time snapshot updates
-- `POST /snapshots` - Create a new snapshot
+- `GET /health` - Server health status, SSE/WebSocket client counts
 
 ### Incidents
-- `GET /incidents` - List all incidents
-- `GET /timeline/:incidentId` - Get snapshot timeline for a specific incident
+- `GET /incidents` - List all incidents (filter by status)
+- `GET /incidents/:id` - Get incident with videos and counts
+- `GET /incidents/:id/timeline` - Get AI-generated timeline events
+- `GET /incidents/:id/snapshots` - Get raw snapshots (debug)
+
+### Videos
+- `GET /videos` - List videos (filter by status/incidentId)
+- `GET /videos/:id` - Get video details
+- `GET /videos/:id/timeline` - Get timeline for specific video
+- `PATCH /videos/:id` - Update status or videoUrl
+
+### Snapshots
+- `POST /snapshots` - Submit snapshot (auto-creates video/incident)
+- `GET /snapshots` - List snapshots
+- `GET /snapshots/:id` - Get specific snapshot
+
+### WebSocket
+- `WS /ws/snapshots` - Real-time snapshot streaming from callers
+
+### SSE (Server-Sent Events)
+- `GET /stream` - Global real-time event stream for dispatchers
+
+For complete API documentation, see [API.md](./API.md).
 
 ## Documentation
 
-- [SSE Usage Guide](./SSE_USAGE.md)
-- [Database Setup](./DATABASE.md)
+- [API Reference](./API.md) - Full endpoint documentation
+- [SSE Usage Guide](./SSE_USAGE.md) - Server-Sent Events infrastructure
+- [Database Setup](./DATABASE.md) - Schema and migrations
+- [Overshoot SDK](./OVERSHOOT_API.md) - Video analysis integration
+- [Next.js Client](./docs/NEXTJS_CLIENT.md) - Caller client integration
+- [Dashboard Client](./docs/DASHBOARD_CLIENT.md) - Dashboard integration
