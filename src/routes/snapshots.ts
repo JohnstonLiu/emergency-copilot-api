@@ -5,7 +5,7 @@ import { snapshotBuffer } from '../services/snapshotBuffer';
 import { sseManager } from '../services/sse';
 import { ensureVideoWithIncident } from '../services/incidentGrouper';
 import { CREATED, BAD_REQUEST, INTERNAL_SERVER_ERROR, OK, NOT_FOUND } from '../config/http';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, and } from 'drizzle-orm';
 
 const router = Router();
 
@@ -64,7 +64,6 @@ router.post('/', async (req, res) => {
     // Insert the snapshot
     const [newSnapshot] = await db.insert(snapshots).values({
       videoId,
-      incidentId,
       timestamp: snapshotTimestamp,
       lat: parsedLat,
       lng: parsedLng,
@@ -110,14 +109,40 @@ router.get('/', async (req, res) => {
   try {
     const { videoId, incidentId, limit = '50' } = req.query;
 
+    // If filtering by incidentId, we need to join through videos
+    if (incidentId) {
+      const snapshotsList = await db
+        .select({
+          id: snapshots.id,
+          videoId: snapshots.videoId,
+          timestamp: snapshots.timestamp,
+          lat: snapshots.lat,
+          lng: snapshots.lng,
+          type: snapshots.type,
+          scenario: snapshots.scenario,
+          data: snapshots.data,
+          createdAt: snapshots.createdAt,
+          updatedAt: snapshots.updatedAt,
+        })
+        .from(snapshots)
+        .innerJoin(videos, eq(snapshots.videoId, videos.id))
+        .where(
+          videoId
+            ? and(eq(videos.incidentId, incidentId as string), eq(snapshots.videoId, videoId as string))
+            : eq(videos.incidentId, incidentId as string)
+        )
+        .orderBy(desc(snapshots.timestamp))
+        .limit(parseInt(limit as string, 10));
+
+      res.status(OK).json(snapshotsList);
+      return;
+    }
+
+    // Simple query without incident filter
     let query = db.select().from(snapshots);
 
     if (videoId) {
       query = query.where(eq(snapshots.videoId, videoId as string)) as typeof query;
-    }
-
-    if (incidentId) {
-      query = query.where(eq(snapshots.incidentId, incidentId as string)) as typeof query;
     }
 
     const snapshotsList = await query

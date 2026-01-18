@@ -36,7 +36,6 @@ export const videos = pgTable('videos', {
 export const snapshots = pgTable('snapshots', {
   id: uuid('id').primaryKey().defaultRandom(),
   videoId: uuid('video_id').notNull().references(() => videos.id, { onDelete: 'cascade' }),
-  incidentId: uuid('incident_id').references(() => incidents.id, { onDelete: 'set null' }),
   timestamp: timestamp('timestamp').defaultNow().notNull(),
   lat: real('lat').notNull(),
   lng: real('lng').notNull(),
@@ -63,7 +62,6 @@ export const timelineEvents = pgTable('timeline_events', {
 // Relations
 export const incidentsRelations = relations(incidents, ({ many }) => ({
   videos: many(videos),
-  snapshots: many(snapshots),
 }));
 
 export const videosRelations = relations(videos, ({ one, many }) => ({
@@ -79,10 +77,6 @@ export const snapshotsRelations = relations(snapshots, ({ one }) => ({
   video: one(videos, {
     fields: [snapshots.videoId],
     references: [videos.id],
-  }),
-  incident: one(incidents, {
-    fields: [snapshots.incidentId],
-    references: [incidents.id],
   }),
 }));
 

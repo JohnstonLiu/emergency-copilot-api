@@ -15,6 +15,13 @@
       "when": 1768701979748,
       "tag": "0001_bumpy_skrulls",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1737158400000,
+      "tag": "0002_remove_snapshot_incident_id",
+      "breakpoints": true
     }
   ]
 }

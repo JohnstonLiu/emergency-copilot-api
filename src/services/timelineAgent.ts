@@ -5,6 +5,7 @@ import {
   snapshots,
   incidents,
   timelineEvents,
+  videos,
   type Snapshot,
   type TimelineEvent,
   type InsertTimelineEvent,
@@ -142,13 +143,25 @@ function parseAIResponse(responseText: string, newSnapshots: Snapshot[]): AIResp
 }
 
 /**
- * Get recent snapshots for context
+ * Get recent snapshots for context (through videos)
  */
 async function getRecentContext(incidentId: string): Promise<Snapshot[]> {
+  // Get videos for this incident
+  const incidentVideos = await db
+    .select({ id: videos.id })
+    .from(videos)
+    .where(eq(videos.incidentId, incidentId));
+
+  const videoIds = incidentVideos.map(v => v.id);
+
+  if (videoIds.length === 0) {
+    return [];
+  }
+
   const recentSnapshots = await db
     .select()
     .from(snapshots)
-    .where(eq(snapshots.incidentId, incidentId))
+    .where(inArray(snapshots.videoId, videoIds))
     .orderBy(desc(snapshots.timestamp))
     .limit(CONTEXT_SNAPSHOT_COUNT);
 

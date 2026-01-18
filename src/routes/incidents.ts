@@ -57,14 +57,18 @@ router.get('/:id', async (req, res) => {
       .from(videos)
       .where(eq(videos.incidentId, incidentId));
 
-    // Get snapshot count
-    const snapshotCount = await db
-      .select()
-      .from(snapshots)
-      .where(eq(snapshots.incidentId, incidentId));
+    const videoIds = incidentVideos.map(v => v.id);
+
+    // Get snapshot count (through videos)
+    let snapshotCount: unknown[] = [];
+    if (videoIds.length > 0) {
+      snapshotCount = await db
+        .select()
+        .from(snapshots)
+        .where(inArray(snapshots.videoId, videoIds));
+    }
 
     // Get timeline event count (through videos)
-    const videoIds = incidentVideos.map(v => v.id);
     let timelineEventCount = 0;
     if (videoIds.length > 0) {
       const eventCount = await db
@@ -139,7 +143,7 @@ router.get('/:id/snapshots', async (req, res) => {
     const incidentId = req.params.id;
     const { limit = '100' } = req.query;
 
-    // Verify incident exists
+    // Verify incident exists and get its videos
     const [incident] = await db
       .select({ id: incidents.id })
       .from(incidents)
@@ -150,13 +154,24 @@ router.get('/:id/snapshots', async (req, res) => {
       return;
     }
 
-    // Get snapshots in chronological order
-    const snapshotsList = await db
-      .select()
-      .from(snapshots)
-      .where(eq(snapshots.incidentId, incidentId))
-      .orderBy(asc(snapshots.timestamp))
-      .limit(parseInt(limit as string, 10));
+    // Get videos for this incident
+    const incidentVideos = await db
+      .select({ id: videos.id })
+      .from(videos)
+      .where(eq(videos.incidentId, incidentId));
+
+    const videoIds = incidentVideos.map(v => v.id);
+
+    // Get snapshots through videos in chronological order
+    let snapshotsList: unknown[] = [];
+    if (videoIds.length > 0) {
+      snapshotsList = await db
+        .select()
+        .from(snapshots)
+        .where(inArray(snapshots.videoId, videoIds))
+        .orderBy(asc(snapshots.timestamp))
+        .limit(parseInt(limit as string, 10));
+    }
 
     res.status(OK).json(snapshotsList);
   } catch (error) {
