@@ -23,8 +23,8 @@ The Dashboard client displays real-time emergency incidents to operators. It use
     ┌─────────────────────────────────────────────────┐
     │              Emergency Copilot API              │
     │                                                 │
-    │   SSE /stream          SSE /incidents/:id/stream│
-    │   REST /incidents      REST /incidents/:id      │
+    │   SSE /stream (global broadcast)               │
+    │   REST /incidents, /videos, /snapshots         │
     └─────────────────────────────────────────────────┘
 ```
 
@@ -34,22 +34,21 @@ The Dashboard client displays real-time emergency incidents to operators. It use
 
 ### 1. Load Initial Data
 
-On app load, fetch active incidents:
+On app load, fetch active incidents and videos:
 
 ```
 GET /incidents?status=active
+GET /videos?status=live
 ```
 
-**Response:**
+**Incidents Response:**
 ```json
 [
   {
     "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
     "status": "active",
-    "currentState": { "severity": "high", "type": "vehicle_accident" },
     "lat": 37.7749,
     "lng": -122.4194,
-    "radius": 100,
     "startedAt": "2026-01-17T10:00:00.000Z",
     "createdAt": "2026-01-17T10:00:00.000Z",
     "updatedAt": "2026-01-17T10:15:00.000Z"
@@ -59,63 +58,67 @@ GET /incidents?status=active
 
 ### 2. Connect to Global SSE
 
-Connect to receive notifications about **new** incidents and videos:
+Connect to receive real-time notifications about all incidents and videos:
 
 ```
 GET /stream?clientId=dashboard-123
 ```
 
-This connection should stay open for the lifetime of the dashboard session.
+This single connection broadcasts ALL events. Keep it open for the dashboard session lifetime.
 
-### 3. User Selects an Incident
+### 3. Filter Events Client-Side
 
-When user clicks an incident, connect to its specific SSE stream:
+When the user selects an incident/video, filter incoming SSE events by `incidentId` or `videoId` in the payload:
+
+```typescript
+eventSource.addEventListener('timelineEvent', (e) => {
+  const data = JSON.parse(e.data);
+  if (data.videoId === selectedVideoId) {
+    // Update timeline for this video
+  }
+});
+```
+
+### 4. Fetch Details on Selection
+
+When user clicks an incident, fetch its full details via REST:
 
 ```
-GET /incidents/:id/stream?clientId=dashboard-123
+GET /incidents/:id          # Get incident with videos
+GET /incidents/:id/timeline # Get timeline events
 ```
 
-This provides:
-- Current state on connect (late-join support)
-- Real-time updates for that incident
-
-### 4. Handle SSE Events
+### 5. Handle SSE Events
 
 Update UI as events arrive (see SSE Events section below).
 
 ---
 
-## SSE Connections
+## SSE Connection
 
 ### Global Stream: `GET /stream`
 
-**Purpose:** Receive notifications about new incidents and videos across the system.
+**Purpose:** Receive all real-time notifications about incidents, videos, and timeline events.
 
-**When to connect:** On dashboard load, keep open always.
+**When to connect:** On dashboard load. Keep open for the entire session.
 
-**Events received:**
-
-| Event | Payload |
-|-------|---------|
-| `connected` | `{ clientId, incidentId: null, timestamp }` |
-| `newVideo` | `{ videoId, incidentId, lat, lng, status, timestamp }` |
-
-### Incident Stream: `GET /incidents/:id/stream`
-
-**Purpose:** Receive detailed updates for a specific incident.
-
-**When to connect:** When user selects/views an incident.
+**Query Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `clientId` | string | Optional custom client identifier |
 
 **Events received:**
 
 | Event | When | Payload |
 |-------|------|---------|
-| `connected` | On connect | `{ clientId, incidentId, timestamp }` |
-| `currentState` | Immediately after connect | Full incident state (see below) |
-| `snapshotReceived` | New observation from caller | `{ incidentId, snapshot, timestamp }` |
+| `connected` | On connect | `{ clientId, timestamp }` |
+| `newVideo` | New video starts | `{ videoId, incidentId, lat, lng, status, timestamp }` |
+| `snapshotReceived` | Snapshot received | `{ videoId, timestamp }` |
 | `timelineEvent` | AI generates insight | `{ videoId, event, timestamp }` |
-| `stateUpdated` | AI updates assessment | `{ incidentId, state, timestamp }` |
-| `videoStatusChanged` | Video ends or recording ready | `{ videoId, incidentId, status, videoUrl?, timestamp }` |
+| `stateUpdated` | AI updates summary | `{ videoId, incidentId, state, timestamp }` |
+| `videoStatusChanged` | Video status changes | `{ videoId, status, videoUrl?, timestamp }` |
+
+**Important:** All events are broadcast to all connected clients. Filter events client-side by checking `videoId` or `incidentId` in the payload to handle only relevant events.
 
 ---
 
@@ -128,43 +131,6 @@ Sent immediately when SSE connection is established.
 ```json
 {
   "clientId": "dashboard-123",
-  "incidentId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
-  "timestamp": "2026-01-17T10:30:00.000Z"
-}
-```
-
-### `currentState`
-
-Sent immediately after `connected` on incident-specific streams. Provides full state for late-joining clients.
-
-```json
-{
-  "incidentId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
-  "incident": {
-    "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
-    "status": "active",
-    "currentState": { "severity": "high", "injuries": true },
-    "lat": 37.7749,
-    "lng": -122.4194,
-    "videos": [
-      {
-        "id": "550e8400-e29b-41d4-a716-446655440000",
-        "status": "live",
-        "lat": 37.7749,
-        "lng": -122.4194,
-        "startedAt": "2026-01-17T10:00:00.000Z"
-      }
-    ]
-  },
-  "timeline": [
-    {
-      "id": "event-uuid",
-      "videoId": "550e8400-e29b-41d4-a716-446655440000",
-      "timestamp": "2026-01-17T10:05:00.000Z",
-      "description": "Two vehicles involved in collision",
-      "confidence": 0.92
-    }
-  ],
   "timestamp": "2026-01-17T10:30:00.000Z"
 }
 ```
@@ -188,22 +154,16 @@ A new video stream started. Broadcast globally.
 
 ### `snapshotReceived`
 
-A caller's device sent a new observation. High frequency during active streams.
+A caller's device sent a new observation. High frequency during active streams (~1/second per video).
 
 ```json
 {
-  "incidentId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
-  "snapshot": {
-    "id": "snapshot-uuid",
-    "timestamp": "2026-01-17T10:05:30.000Z",
-    "type": "overshoot_analysis",
-    "scenario": "vehicle_accident"
-  },
+  "videoId": "550e8400-e29b-41d4-a716-446655440000",
   "timestamp": "2026-01-17T10:05:30.000Z"
 }
 ```
 
-**Action:** Optional - show activity indicator, update snapshot count. May want to debounce UI updates.
+**Action:** Optional - show activity indicator, update snapshot count. Consider debouncing UI updates due to high frequency.
 
 ### `timelineEvent`
 
@@ -231,24 +191,18 @@ AI processed snapshots and generated a meaningful event.
 
 ### `stateUpdated`
 
-AI updated its overall assessment of the incident.
+AI updated its overall assessment of a video (the `currentState` field).
 
 ```json
 {
+  "videoId": "550e8400-e29b-41d4-a716-446655440000",
   "incidentId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
-  "state": {
-    "severity": "critical",
-    "type": "vehicle_accident",
-    "injuries": true,
-    "injuryCount": 2,
-    "vehicleCount": 2,
-    "hazards": ["fuel_leak"]
-  },
+  "state": "Two vehicle collision. One person exiting vehicle, appears injured. Second vehicle has airbag deployed.",
   "timestamp": "2026-01-17T10:10:00.000Z"
 }
 ```
 
-**Action:** Update incident summary/header with new assessment.
+**Action:** Update the video's state summary display. This is a human-readable AI-generated description.
 
 ### `videoStatusChanged`
 
@@ -342,24 +296,33 @@ GET /videos?incidentId=...&status=live
 
 EventSource auto-reconnects on disconnect. Handle the `error` event for UI feedback:
 
-```
-eventSource.onerror → show "Reconnecting..." indicator
-eventSource.onopen → hide indicator
+```typescript
+eventSource.onerror = () => {
+  // Show "Reconnecting..." indicator
+};
+
+eventSource.onopen = () => {
+  // Hide reconnection indicator
+};
 ```
 
 ### Multiple Incident Views
 
-If operators can view multiple incidents simultaneously, maintain separate SSE connections for each:
+Since there's a single global SSE stream, you don't need multiple SSE connections. Filter events client-side by `incidentId` or `videoId`:
 
-```
-/incidents/incident-1/stream
-/incidents/incident-2/stream
+```typescript
+eventSource.addEventListener('timelineEvent', (e) => {
+  const data = JSON.parse(e.data);
+  // Update timeline for whichever incident/video matches
+  if (data.videoId === currentlyViewedVideoId) {
+    updateTimeline(data.event);
+  }
+});
 ```
 
 ### Cleanup
 
-Close SSE connections when:
-- User navigates away from incident
+Close the SSE connection when:
 - Dashboard unmounts
 - User logs out
 
@@ -406,6 +369,7 @@ NEXT_PUBLIC_API_URL=https://api.yourapp.com
 ## Notes
 
 - **Heartbeat:** SSE sends heartbeat comments every 30 seconds to keep connections alive
-- **Late-join:** `currentState` event ensures clients see full state even if they connect mid-incident
+- **Late-join:** Fetch initial state via REST (`GET /incidents`, `GET /videos`) when dashboard loads, then receive updates via SSE
 - **Debounce:** `snapshotReceived` fires frequently (~1/second per video). Debounce UI updates if needed.
-- **Video streaming:** This API does not handle live video playback. Use WebRTC or a streaming service separately.
+- **Video streaming:** This API does not handle live video playback. Use LiveKit or a WebRTC streaming service separately.
+- **Single connection:** Use one SSE connection for all events. Filter by `videoId`/`incidentId` client-side.
