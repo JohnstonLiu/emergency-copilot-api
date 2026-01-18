@@ -1,7 +1,15 @@
-import { DATABASE_URL } from './env';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
+import { DATABASE_POOLER_URL } from './env';
 
-const initDB = () => {
-  console.log("Initializing database...");
+// Create postgres connection using pooler URL
+// Disable prefetch as it is not supported for "Transaction" pool mode
+const client = postgres(DATABASE_POOLER_URL, { prepare: false });
+
+// Create drizzle instance
+export const db = drizzle(client);
+
+// For graceful shutdown
+export const closeDatabase = async () => {
+  await client.end();
 };
-
-export default initDB;
