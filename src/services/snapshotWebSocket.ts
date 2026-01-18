@@ -1,0 +1,251 @@
+import { WebSocketServer, WebSocket } from 'ws';
+import type { Server } from 'http';
+import { db } from '../config/db';
+import { snapshots } from '../models';
+import { snapshotBuffer } from './snapshotBuffer';
+import { sseManager } from './sse';
+import { ensureVideoWithIncident, updateVideoStatus } from './incidentGrouper';
+
+/**
+ * Active video session tracked by WebSocket connection
+ */
+interface VideoSession {
+  videoId: string;
+  incidentId: string;
+  lat: number;
+  lng: number;
+  ws: WebSocket;
+}
+
+/**
+ * Message types from client
+ */
+interface InitMessage {
+  type: 'init';
+  videoId: string;
+  lat: number;
+  lng: number;
+}
+
+interface SnapshotMessage {
+  type: 'snapshot';
+  timestamp?: string;
+  scenario: string;
+  data: Record<string, unknown>;
+}
+
+type ClientMessage = InitMessage | SnapshotMessage;
+
+/**
+ * WebSocket manager for snapshot ingestion
+ */
+class SnapshotWebSocketManager {
+  private wss: WebSocketServer | null = null;
+  private sessions: Map<WebSocket, VideoSession> = new Map();
+
+  /**
+   * Initialize WebSocket server attached to HTTP server
+   */
+  initialize(server: Server): void {
+    this.wss = new WebSocketServer({ server, path: '/ws/snapshots' });
+
+    this.wss.on('connection', (ws) => {
+      console.log('New WebSocket connection');
+
+      ws.on('message', async (data) => {
+        try {
+          const message = JSON.parse(data.toString()) as ClientMessage;
+          await this.handleMessage(ws, message);
+        } catch (error) {
+          console.error('WebSocket message error:', error);
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid message format' }));
+        }
+      });
+
+      ws.on('close', async () => {
+        await this.handleDisconnect(ws);
+      });
+
+      ws.on('error', (error) => {
+        console.error('WebSocket error:', error);
+      });
+
+      // Send welcome message
+      ws.send(JSON.stringify({ type: 'connected', message: 'Send init message with videoId, lat, lng' }));
+    });
+
+    console.log('WebSocket server initialized at /ws/snapshots');
+  }
+
+  /**
+   * Handle incoming message
+   */
+  private async handleMessage(ws: WebSocket, message: ClientMessage): Promise<void> {
+    if (message.type === 'init') {
+      await this.handleInit(ws, message);
+    } else if (message.type === 'snapshot') {
+      await this.handleSnapshot(ws, message);
+    } else {
+      ws.send(JSON.stringify({ type: 'error', message: 'Unknown message type' }));
+    }
+  }
+
+  /**
+   * Handle init message - create video and incident
+   */
+  private async handleInit(ws: WebSocket, message: InitMessage): Promise<void> {
+    const { videoId, lat, lng } = message;
+
+    if (!videoId || lat === undefined || lng === undefined) {
+      ws.send(JSON.stringify({ type: 'error', message: 'Missing required fields: videoId, lat, lng' }));
+      return;
+    }
+
+    // Check if this connection already has a session
+    if (this.sessions.has(ws)) {
+      ws.send(JSON.stringify({ type: 'error', message: 'Session already initialized' }));
+      return;
+    }
+
+    const parsedLat = parseFloat(String(lat));
+    const parsedLng = parseFloat(String(lng));
+    const startedAt = new Date();
+
+    // Create video and assign to incident
+    const { incidentId, isNewVideo } = await ensureVideoWithIncident(
+      videoId,
+      parsedLat,
+      parsedLng,
+      startedAt
+    );
+
+    // Store session
+    const session: VideoSession = {
+      videoId,
+      incidentId,
+      lat: parsedLat,
+      lng: parsedLng,
+      ws,
+    };
+    this.sessions.set(ws, session);
+
+    console.log(`WebSocket session initialized: video ${videoId} → incident ${incidentId}`);
+
+    // Broadcast new video event if this is new
+    if (isNewVideo) {
+      sseManager.broadcast('newVideo', {
+        videoId,
+        incidentId,
+        lat: parsedLat,
+        lng: parsedLng,
+        status: 'live',
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Send confirmation
+    ws.send(JSON.stringify({
+      type: 'initialized',
+      videoId,
+      incidentId,
+      isNewVideo,
+    }));
+  }
+
+  /**
+   * Handle snapshot message - store and buffer
+   */
+  private async handleSnapshot(ws: WebSocket, message: SnapshotMessage): Promise<void> {
+    const session = this.sessions.get(ws);
+
+    if (!session) {
+      ws.send(JSON.stringify({ type: 'error', message: 'Session not initialized. Send init first.' }));
+      return;
+    }
+
+    const { scenario, data, timestamp } = message;
+
+    if (!scenario) {
+      ws.send(JSON.stringify({ type: 'error', message: 'Missing required field: scenario' }));
+      return;
+    }
+
+    const snapshotTimestamp = timestamp ? new Date(timestamp) : new Date();
+
+    // Insert snapshot
+    const [newSnapshot] = await db.insert(snapshots).values({
+      videoId: session.videoId,
+      timestamp: snapshotTimestamp,
+      lat: session.lat,
+      lng: session.lng,
+      type: 'overshoot_analysis',
+      scenario,
+      data: data || {},
+    }).returning();
+
+    console.log(`Snapshot received via WS for incident ${session.incidentId}: ${newSnapshot.id}`);
+
+    // Add to buffer for batch processing
+    snapshotBuffer.add(session.incidentId, newSnapshot);
+
+    // Broadcast to incident subscribers
+    sseManager.broadcastToIncident(session.incidentId, 'snapshotReceived', {
+      incidentId: session.incidentId,
+      snapshot: {
+        id: newSnapshot.id,
+        timestamp: newSnapshot.timestamp,
+        type: newSnapshot.type,
+        scenario: newSnapshot.scenario,
+      },
+      timestamp: new Date().toISOString(),
+    });
+
+    // Send ack
+    ws.send(JSON.stringify({
+      type: 'snapshot_ack',
+      snapshotId: newSnapshot.id,
+    }));
+  }
+
+  /**
+   * Handle client disconnect - mark video as ended
+   */
+  private async handleDisconnect(ws: WebSocket): Promise<void> {
+    const session = this.sessions.get(ws);
+
+    if (session) {
+      console.log(`WebSocket disconnected: video ${session.videoId}`);
+
+      // Mark video as ended
+      await updateVideoStatus(session.videoId, 'ended');
+
+      // Broadcast video ended
+      sseManager.broadcastToIncident(session.incidentId, 'videoStatusChanged', {
+        videoId: session.videoId,
+        incidentId: session.incidentId,
+        status: 'ended',
+        timestamp: new Date().toISOString(),
+      });
+
+      // Clean up session
+      this.sessions.delete(ws);
+    }
+  }
+
+  /**
+   * Get active session count
+   */
+  getSessionCount(): number {
+    return this.sessions.size;
+  }
+
+  /**
+   * Get all active video IDs
+   */
+  getActiveVideoIds(): string[] {
+    return Array.from(this.sessions.values()).map(s => s.videoId);
+  }
+}
+
+// Export singleton
+export const snapshotWsManager = new SnapshotWebSocketManager();

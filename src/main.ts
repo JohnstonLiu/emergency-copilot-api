@@ -1,4 +1,5 @@
 import express from 'express';
+import { createServer } from 'http';
 import cors from 'cors';
 import { PORT } from './config/env';
 import { requestLogger } from './middleware/logger';
@@ -7,6 +8,7 @@ import { requestLogger } from './middleware/logger';
 import { sseManager } from './services/sse';
 import { snapshotBuffer } from './services/snapshotBuffer';
 import { processBatch } from './services/timelineAgent';
+import { snapshotWsManager } from './services/snapshotWebSocket';
 
 // Routes
 import videosRouter from './routes/videos';
@@ -14,6 +16,7 @@ import snapshotsRouter from './routes/snapshots';
 import incidentsRouter, { fetchIncidentCurrentState } from './routes/incidents';
 
 const app = express();
+const server = createServer(app);
 const port = PORT;
 
 // Initialize services
@@ -25,6 +28,10 @@ function initializeServices() {
   // Set up SSE manager to fetch current state for late-joining clients
   sseManager.setFetchCurrentStateCallback(fetchIncidentCurrentState);
   console.log('SSE manager initialized with current state callback');
+
+  // Initialize WebSocket server for snapshot ingestion
+  snapshotWsManager.initialize(server);
+  console.log('WebSocket server initialized for snapshot ingestion');
 }
 
 // Middleware (must be before routes)
@@ -39,6 +46,7 @@ app.get('/health', (req, res) => {
     status: 'healthy',
     timestamp: new Date().toISOString(),
     activeSSEClients: sseManager.getClientCount(),
+    activeWebSocketSessions: snapshotWsManager.getSessionCount(),
   });
 });
 
@@ -64,7 +72,7 @@ app.use((err: Error, req: express.Request, res: express.Response, _next: express
 // Initialize services and start server
 initializeServices();
 
-app.listen(port, () => {
+server.listen(port, () => {
   console.log(`
 ╔════════════════════════════════════════════════════╗
 ║         Emergency Copilot API Server               ║
@@ -73,8 +81,8 @@ app.listen(port, () => {
 ║  Health: http://localhost:${port}/health           ║
 ╠════════════════════════════════════════════════════╣
 ║  Endpoints:                                        ║
+║  • WS     /ws/snapshots          - Snapshot stream ║
 ║  • POST   /snapshots             - Submit snapshot ║
-║  • PATCH  /videos/:id            - Update video    ║
 ║  • GET    /videos                - List videos     ║
 ║  • GET    /incidents             - List incidents  ║
 ║  • GET    /incidents/:id         - Get incident    ║
