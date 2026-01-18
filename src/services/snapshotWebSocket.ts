@@ -14,6 +14,7 @@ interface VideoSession {
   incidentId: string;
   lat: number;
   lng: number;
+  filename?: string; // Original filename for replay (e.g., 'pov1.mov')
   ws: WebSocket;
 }
 
@@ -25,6 +26,7 @@ interface InitMessage {
   videoId: string;
   lat: number;
   lng: number;
+  filename?: string; // Original filename for replay (e.g., 'pov1.mov')
 }
 
 interface SnapshotMessage {
@@ -34,7 +36,12 @@ interface SnapshotMessage {
   data: Record<string, unknown>;
 }
 
-type ClientMessage = InitMessage | SnapshotMessage;
+interface VideoEndedMessage {
+  type: 'videoEnded';
+  timestamp?: string;
+}
+
+type ClientMessage = InitMessage | SnapshotMessage | VideoEndedMessage;
 
 /**
  * WebSocket manager for snapshot ingestion
@@ -88,6 +95,8 @@ class SnapshotWebSocketManager {
       await this.handleInit(ws, message);
     } else if (message.type === 'snapshot') {
       await this.handleSnapshot(ws, message);
+    } else if (message.type === 'videoEnded') {
+      await this.handleVideoEnded(ws, message);
     } else {
       ws.send(JSON.stringify({ type: 'error', message: 'Unknown message type' }));
     }
@@ -97,7 +106,7 @@ class SnapshotWebSocketManager {
    * Handle init message - create video and incident
    */
   private async handleInit(ws: WebSocket, message: InitMessage): Promise<void> {
-    const { videoId, lat, lng } = message;
+    const { videoId, lat, lng, filename } = message;
 
     if (!videoId || lat === undefined || lng === undefined) {
       ws.send(JSON.stringify({ type: 'error', message: 'Missing required fields: videoId, lat, lng' }));
@@ -122,17 +131,18 @@ class SnapshotWebSocketManager {
       startedAt
     );
 
-    // Store session
+    // Store session (including filename for replay)
     const session: VideoSession = {
       videoId,
       incidentId,
       lat: parsedLat,
       lng: parsedLng,
+      filename,
       ws,
     };
     this.sessions.set(ws, session);
 
-    console.log(`[WS] Session initialized: video=${videoId} incident=${incidentId} isNew=${isNewVideo} (${this.sessions.size} active sessions)`);
+    console.log(`[WS] Session initialized: video=${videoId} incident=${incidentId} filename=${filename || 'none'} isNew=${isNewVideo} (${this.sessions.size} active sessions)`);
 
     // Broadcast new video event if this is new
     if (isNewVideo) {
@@ -142,6 +152,7 @@ class SnapshotWebSocketManager {
         lat: parsedLat,
         lng: parsedLng,
         status: 'live',
+        filename,
         timestamp: new Date().toISOString(),
       });
     }
@@ -211,21 +222,53 @@ class SnapshotWebSocketManager {
   }
 
   /**
+   * Handle explicit videoEnded message from client
+   */
+  private async handleVideoEnded(ws: WebSocket, message: VideoEndedMessage): Promise<void> {
+    const session = this.sessions.get(ws);
+
+    if (!session) {
+      ws.send(JSON.stringify({ type: 'error', message: 'Session not initialized. Send init first.' }));
+      return;
+    }
+
+    console.log(`[WS] Video ended explicitly: video=${session.videoId} filename=${session.filename || 'none'}`);
+
+    // Mark video as ended
+    await updateVideoStatus(session.videoId, 'ended');
+
+    // Broadcast video ended with filename for replay
+    sseManager.broadcast('videoStatusChanged', {
+      videoId: session.videoId,
+      status: 'ended',
+      filename: session.filename,
+      timestamp: message.timestamp || new Date().toISOString(),
+    });
+
+    // Send confirmation
+    ws.send(JSON.stringify({
+      type: 'videoEnded_ack',
+      videoId: session.videoId,
+    }));
+  }
+
+  /**
    * Handle client disconnect - mark video as ended
    */
   private async handleDisconnect(ws: WebSocket): Promise<void> {
     const session = this.sessions.get(ws);
 
     if (session) {
-      console.log(`[WS] Session ended: video=${session.videoId} incident=${session.incidentId}`);
+      console.log(`[WS] Session ended: video=${session.videoId} incident=${session.incidentId} filename=${session.filename || 'none'}`);
 
       // Mark video as ended
       await updateVideoStatus(session.videoId, 'ended');
 
-      // Broadcast video ended
+      // Broadcast video ended with filename for replay
       sseManager.broadcast('videoStatusChanged', {
         videoId: session.videoId,
         status: 'ended',
+        filename: session.filename,
         timestamp: new Date().toISOString(),
       });
 
