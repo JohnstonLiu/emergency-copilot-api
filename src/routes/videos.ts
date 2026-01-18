@@ -1,70 +1,77 @@
 import { Router } from 'express';
 import { db } from '../config/db';
-import { videos } from '../models';
-import { ensureVideoWithIncident } from '../services/incidentGrouper';
-import { CREATED, BAD_REQUEST, INTERNAL_SERVER_ERROR, OK } from '../config/http';
+import { videos, type VideoStatus } from '../models';
+import { updateVideoStatus } from '../services/incidentGrouper';
+import { BAD_REQUEST, INTERNAL_SERVER_ERROR, OK, NOT_FOUND } from '../config/http';
 import { eq, desc } from 'drizzle-orm';
 import { sseManager } from '../services/sse';
 
 const router = Router();
 
 /**
- * POST /videos
- * Register a new video with location and time
- * Auto-assigns to an incident (creates new one if necessary)
+ * PATCH /videos/:id
+ * Update video status and/or set the recording URL
+ * Call this when:
+ * - Stream ends (status: 'ended')
+ * - Recording is ready (status: 'recorded', videoUrl: '...')
  */
-router.post('/', async (req, res) => {
+router.patch('/:id', async (req, res) => {
   try {
-    const { videoId, videoUrl, lat, lng, startedAt } = req.body;
+    const videoId = req.params.id;
+    const { status, videoUrl } = req.body;
 
-    // Validate required fields
-    if (!videoId || !videoUrl || lat === undefined || lng === undefined || !startedAt) {
+    // Check video exists
+    const [existingVideo] = await db
+      .select()
+      .from(videos)
+      .where(eq(videos.id, videoId));
+
+    if (!existingVideo) {
+      res.status(NOT_FOUND).json({ error: 'Video not found' });
+      return;
+    }
+
+    // Validate status if provided
+    const validStatuses: VideoStatus[] = ['live', 'ended', 'recorded'];
+    if (status && !validStatuses.includes(status)) {
       res.status(BAD_REQUEST).json({
-        error: 'Missing required fields: videoId, videoUrl, lat, lng, startedAt',
+        error: `Invalid status. Must be one of: ${validStatuses.join(', ')}`,
       });
       return;
     }
 
-    // Parse startedAt to Date if string
-    const startedAtDate = new Date(startedAt);
-    if (isNaN(startedAtDate.getTime())) {
-      res.status(BAD_REQUEST).json({
-        error: 'Invalid startedAt date format',
-      });
-      return;
+    // Update video
+    if (status) {
+      await updateVideoStatus(videoId, status, videoUrl);
+    } else if (videoUrl) {
+      // Just updating URL without status change
+      await db
+        .update(videos)
+        .set({ videoUrl, updatedAt: new Date() })
+        .where(eq(videos.id, videoId));
     }
 
-    // Ensure video exists and has incident
-    const result = await ensureVideoWithIncident(
-      videoId,
-      videoUrl,
-      parseFloat(lat),
-      parseFloat(lng),
-      startedAtDate
-    );
+    // Get updated video
+    const [updatedVideo] = await db
+      .select()
+      .from(videos)
+      .where(eq(videos.id, videoId));
 
-    console.log(`Video registered: ${result.videoId}, incident: ${result.incidentId}, new: ${result.isNewVideo}`);
-
-    // Broadcast new video event if it's a new video
-    if (result.isNewVideo) {
-      sseManager.broadcast('newVideo', {
-        videoId: result.videoId,
-        incidentId: result.incidentId,
-        videoUrl,
-        lat,
-        lng,
+    // Broadcast video status change
+    if (existingVideo.incidentId) {
+      sseManager.broadcastToIncident(existingVideo.incidentId, 'videoStatusChanged', {
+        videoId,
+        incidentId: existingVideo.incidentId,
+        status: updatedVideo.status,
+        videoUrl: updatedVideo.videoUrl,
         timestamp: new Date().toISOString(),
       });
     }
 
-    res.status(CREATED).json({
-      videoId: result.videoId,
-      incidentId: result.incidentId,
-      isNewVideo: result.isNewVideo,
-    });
+    res.status(OK).json(updatedVideo);
   } catch (error) {
-    console.error('Error registering video:', error);
-    res.status(INTERNAL_SERVER_ERROR).json({ error: 'Failed to register video' });
+    console.error('Error updating video:', error);
+    res.status(INTERNAL_SERVER_ERROR).json({ error: 'Failed to update video' });
   }
 });
 
@@ -74,10 +81,21 @@ router.post('/', async (req, res) => {
  */
 router.get('/', async (req, res) => {
   try {
-    const videosList = await db
-      .select()
-      .from(videos)
-      .orderBy(desc(videos.createdAt));
+    const { status, incidentId, limit = '50' } = req.query;
+
+    let query = db.select().from(videos);
+
+    if (status) {
+      query = query.where(eq(videos.status, status as VideoStatus)) as typeof query;
+    }
+
+    if (incidentId) {
+      query = query.where(eq(videos.incidentId, incidentId as string)) as typeof query;
+    }
+
+    const videosList = await query
+      .orderBy(desc(videos.createdAt))
+      .limit(parseInt(limit as string, 10));
 
     res.status(OK).json(videosList);
   } catch (error) {
@@ -98,7 +116,7 @@ router.get('/:id', async (req, res) => {
       .where(eq(videos.id, req.params.id));
 
     if (!video) {
-      res.status(404).json({ error: 'Video not found' });
+      res.status(NOT_FOUND).json({ error: 'Video not found' });
       return;
     }
 

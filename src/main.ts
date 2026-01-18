@@ -67,13 +67,14 @@ app.listen(port, () => {
 ║  Health: http://localhost:${port}/health           ║
 ╠════════════════════════════════════════════════════╣
 ║  Endpoints:                                        ║
-║  • POST   /videos              - Register video    ║
-║  • POST   /snapshots           - Submit snapshot   ║
-║  • GET    /incidents           - List incidents    ║
-║  • GET    /incidents/:id       - Get incident      ║
+║  • POST   /snapshots             - Submit snapshot ║
+║  • PATCH  /videos/:id            - Update video    ║
+║  • GET    /videos                - List videos     ║
+║  • GET    /incidents             - List incidents  ║
+║  • GET    /incidents/:id         - Get incident    ║
 ║  • GET    /incidents/:id/timeline - Get timeline   ║
-║  • GET    /incidents/:id/stream   - SSE stream     ║
-║  • GET    /stream              - Global SSE        ║
+║  • GET    /incidents/:id/stream  - SSE stream      ║
+║  • GET    /stream                - Global SSE      ║
 ╚════════════════════════════════════════════════════╝
   `);
 });

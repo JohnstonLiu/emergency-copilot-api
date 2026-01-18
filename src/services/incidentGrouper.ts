@@ -1,5 +1,5 @@
 import { db } from '../config/db';
-import { incidents, videos, type Incident, type InsertIncident } from '../models';
+import { incidents, videos, type Incident, type InsertIncident, type VideoStatus } from '../models';
 import { isWithinRadius } from '../utils/geo';
 import { INCIDENT_TIME_WINDOW_HOURS, INCIDENT_RADIUS_METERS } from '../config/env';
 import { eq, and, gte } from 'drizzle-orm';
@@ -126,17 +126,15 @@ export async function getIncidentForVideo(videoId: string): Promise<string | nul
 
 /**
  * Ensure a video exists and has an incident assigned
- * Creates the video record if it doesn't exist
+ * Creates the video record if it doesn't exist (auto-created from first snapshot)
  * @param videoId Video ID (required - provided by the Next.js client)
- * @param videoUrl Video URL
  * @param lat Latitude
  * @param lng Longitude
  * @param startedAt Start time
- * @returns Incident ID
+ * @returns Video ID, Incident ID, and whether this is a new video
  */
 export async function ensureVideoWithIncident(
   videoId: string,
-  videoUrl: string,
   lat: number,
   lng: number,
   startedAt: Date
@@ -172,12 +170,12 @@ export async function ensureVideoWithIncident(
     };
   }
 
-  // Video doesn't exist - create it
+  // Video doesn't exist - create it (status defaults to 'live', no videoUrl yet)
   const [newVideo] = await db
     .insert(videos)
     .values({
       id: videoId,
-      videoUrl,
+      status: 'live',
       lat,
       lng,
       startedAt,
@@ -192,4 +190,36 @@ export async function ensureVideoWithIncident(
     incidentId,
     isNewVideo: true,
   };
+}
+
+/**
+ * Update a video's status and optionally set the recording URL
+ * @param videoId Video ID
+ * @param status New status
+ * @param videoUrl Optional video URL (for recorded videos)
+ */
+export async function updateVideoStatus(
+  videoId: string,
+  status: VideoStatus,
+  videoUrl?: string
+): Promise<void> {
+  const updateData: { status: VideoStatus; videoUrl?: string; endedAt?: Date; updatedAt: Date } = {
+    status,
+    updatedAt: new Date(),
+  };
+
+  if (status === 'ended' || status === 'recorded') {
+    updateData.endedAt = new Date();
+  }
+
+  if (videoUrl) {
+    updateData.videoUrl = videoUrl;
+  }
+
+  await db
+    .update(videos)
+    .set(updateData)
+    .where(eq(videos.id, videoId));
+
+  console.log(`Video ${videoId} status updated to ${status}${videoUrl ? ` with URL: ${videoUrl}` : ''}`);
 }

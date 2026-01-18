@@ -3,6 +3,7 @@ import { db } from '../config/db';
 import { snapshots, videos } from '../models';
 import { snapshotBuffer } from '../services/snapshotBuffer';
 import { sseManager } from '../services/sse';
+import { ensureVideoWithIncident } from '../services/incidentGrouper';
 import { CREATED, BAD_REQUEST, INTERNAL_SERVER_ERROR, OK, NOT_FOUND } from '../config/http';
 import { eq, desc } from 'drizzle-orm';
 
@@ -11,7 +12,7 @@ const router = Router();
 /**
  * POST /snapshots
  * Receive a snapshot from the Next.js client
- * Auto-assigns to incident via video, buffers for batch processing
+ * Auto-creates video and incident if needed, buffers for batch processing
  */
 router.post('/', async (req, res) => {
   try {
@@ -33,49 +34,53 @@ router.post('/', async (req, res) => {
       return;
     }
 
-    // Get the video to find its incident
-    const [video] = await db
-      .select()
-      .from(videos)
-      .where(eq(videos.id, videoId));
-
-    if (!video) {
-      res.status(NOT_FOUND).json({
-        error: `Video not found: ${videoId}. Please register the video first via POST /videos`,
-      });
-      return;
-    }
-
-    if (!video.incidentId) {
-      res.status(BAD_REQUEST).json({
-        error: `Video ${videoId} is not associated with an incident`,
-      });
-      return;
-    }
-
     // Parse timestamp
     const snapshotTimestamp = timestamp ? new Date(timestamp) : new Date();
+    const parsedLat = parseFloat(lat);
+    const parsedLng = parseFloat(lng);
+
+    // Auto-create video and incident if needed (first snapshot creates the video)
+    const { incidentId, isNewVideo } = await ensureVideoWithIncident(
+      videoId,
+      parsedLat,
+      parsedLng,
+      snapshotTimestamp
+    );
+
+    if (isNewVideo) {
+      console.log(`Auto-created video ${videoId} and assigned to incident ${incidentId}`);
+      
+      // Broadcast new video event
+      sseManager.broadcast('newVideo', {
+        videoId,
+        incidentId,
+        lat: parsedLat,
+        lng: parsedLng,
+        status: 'live',
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     // Insert the snapshot
     const [newSnapshot] = await db.insert(snapshots).values({
       videoId,
-      incidentId: video.incidentId,
+      incidentId,
       timestamp: snapshotTimestamp,
-      lat: parseFloat(lat),
-      lng: parseFloat(lng),
+      lat: parsedLat,
+      lng: parsedLng,
       type,
       scenario,
       data: data || {},
     }).returning();
 
-    console.log(`Snapshot received for incident ${video.incidentId}: ${newSnapshot.id}`);
+    console.log(`Snapshot received for incident ${incidentId}: ${newSnapshot.id}`);
 
     // Add to buffer for batch processing
-    snapshotBuffer.add(video.incidentId, newSnapshot);
+    snapshotBuffer.add(incidentId, newSnapshot);
 
     // Broadcast snapshot received event to incident subscribers
-    sseManager.broadcastToIncident(video.incidentId, 'snapshotReceived', {
-      incidentId: video.incidentId,
+    sseManager.broadcastToIncident(incidentId, 'snapshotReceived', {
+      incidentId,
       snapshot: {
         id: newSnapshot.id,
         timestamp: newSnapshot.timestamp,
@@ -87,8 +92,9 @@ router.post('/', async (req, res) => {
 
     res.status(CREATED).json({
       snapshotId: newSnapshot.id,
-      incidentId: video.incidentId,
+      incidentId,
       videoId: newSnapshot.videoId,
+      isNewVideo,
     });
   } catch (error) {
     console.error('Error creating snapshot:', error);

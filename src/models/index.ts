@@ -3,6 +3,7 @@ import { relations } from 'drizzle-orm';
 
 export type EventScenario = string;
 export type IncidentStatus = 'active' | 'resolved' | 'archived';
+export type VideoStatus = 'live' | 'ended' | 'recorded';
 
 // Incidents table - must be defined first for FK references
 export const incidents = pgTable('incidents', {
@@ -21,10 +22,12 @@ export const incidents = pgTable('incidents', {
 export const videos = pgTable('videos', {
   id: uuid('id').primaryKey().defaultRandom(),
   incidentId: uuid('incident_id').references(() => incidents.id, { onDelete: 'set null' }),
-  videoUrl: varchar('video_url', { length: 512 }).notNull(),
+  status: varchar('status', { length: 50 }).$type<VideoStatus>().default('live').notNull(),
+  videoUrl: varchar('video_url', { length: 512 }), // Nullable - set when recording is ready
   lat: real('lat').notNull(),
   lng: real('lng').notNull(),
   startedAt: timestamp('started_at').notNull(),
+  endedAt: timestamp('ended_at'), // When stream ended
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
